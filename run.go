@@ -1,11 +1,12 @@
 package main
 
 import (
-	"github.com/urfave/cli"
 	"os"
 	"path"
 	"strings"
+
 	"github.com/saturn4er/bee/lib"
+	"github.com/urfave/cli"
 )
 
 func init() {
@@ -36,11 +37,14 @@ func init() {
 					}
 				}
 			}
-			beegoApplication, err := lib.NewApplication(appname, cwd)
+			beegoApplication, err := lib.NewApplication(appname, cwd, c.Args().Tail())
 			if err != nil {
 				return err
 			}
-			beegoApplication.Build()
+			err = beegoApplication.Build()
+			if err != nil {
+				return err
+			}
 			beegoApplication.Run()
 			beegoApplication.RunRestartWatcher()
 			<-beegoApplication.ExitC

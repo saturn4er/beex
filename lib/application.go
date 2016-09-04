@@ -10,6 +10,10 @@ import (
 	"os/exec"
 	"runtime"
 
+	"time"
+
+	"sync"
+
 	"github.com/howeyc/fsnotify"
 )
 
@@ -17,10 +21,14 @@ type Application struct {
 	appname        string
 	path           string
 	ExecutablePath string
+	Args           []string
 	PathsToWatch   []string
 	ExitC          chan int
+	process        *exec.Cmd
 	GOPATH         string
 	RunC           chan int
+	RunLock        sync.Mutex
+	BuildOnce      sync.Once
 }
 
 func (a *Application) GetAppname() string {
@@ -31,30 +39,63 @@ func (a *Application) BuildAndRun() error {
 	if err != nil {
 		return err
 	}
-	err = a.Run()
-	if err != nil {
-		return err
-	}
+	a.Run()
 	return nil
 }
 func (a *Application) Build() error {
-	err := a.InstallDependencies()
-	if err != nil {
-		return err
-	}
-	LogInfo("Building to ./%s", a.ExecutablePath)
+	var err error
+	a.BuildOnce.Do(func() {
+		err = a.InstallDependencies()
+		if err != nil {
+			return
+		}
+		LogInfo("Building to ./%s", a.ExecutablePath)
 
-	args := []string{"build"}
-	args = append(args, "-o", a.ExecutablePath)
-	bcmd := exec.Command("go", args...)
-	bcmd.Env = append(os.Environ(), "GOGC=off")
-	bcmd.Stdout = os.Stdout
-	bcmd.Stderr = os.Stderr
-	err = bcmd.Run()
-	return nil
+		args := []string{"build"}
+		args = append(args, "-o", a.ExecutablePath)
+		bcmd := exec.Command("go", args...)
+		bcmd.Env = append(os.Environ(), "GOGC=off")
+		bcmd.Stdout = os.Stdout
+		bcmd.Stderr = os.Stderr
+		err = bcmd.Run()
+		if err != nil {
+			return
+		}
+		if !bcmd.ProcessState.Success() {
+			err = errors.New("Building error")
+		}
+	})
+	return err
 }
-func (a *Application) Run() error {
-	return nil
+func (a *Application) Run() {
+	a.RunLock.Lock()
+	defer a.RunLock.Unlock()
+	cmd := exec.Command(a.ExecutablePath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Args = append([]string{a.ExecutablePath}, a.Args...)
+	cmd.Env = os.Environ()                                   // TODO: Add from config
+	a.process = cmd
+	go cmd.Run()
+}
+func (a *Application) Stop() error {
+	a.RunLock.Lock()
+	defer a.RunLock.Unlock()
+	if a.process != nil && a.process.ProcessState != nil {
+		if a.process.ProcessState.Exited() {
+			Debugf("Already stopped")
+			return errors.New("Already stopped")
+		}
+		LogInfo("Stopping application..")
+		err := a.process.Process.Kill()
+		if err != nil {
+			LogError("Failed to stop application: %v", err)
+			return err
+		}
+		return nil
+	}
+	return errors.New("Not running yet")
+
 }
 func (a *Application) InstallDependencies() error {
 	LogInfo("Checking dependencies...")
@@ -80,6 +121,19 @@ func (a *Application) InstallDependencies() error {
 	return nil
 }
 func (a *Application) RunRestartWatcher() {
+
+	// Program stopped watcher
+	go func() {
+		for {
+			if a.process != nil && a.process.ProcessState != nil && a.process.ProcessState.Exited() {
+				a.process.ProcessState.Success()
+				LogInfo("Application stopped. Restarting...")
+				a.Run()
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+	// Update file watcher
 	NewFoldersWatcher(&WatchConfig{
 		PathsToWath: a.PathsToWatch,
 		Extensions:  []string{".go", ".tpl"},
@@ -88,6 +142,7 @@ func (a *Application) RunRestartWatcher() {
 			if checkTMPFile(e.Name) {
 				return nil
 			}
+			a.Stop()
 			return a.BuildAndRun()
 		},
 	})
@@ -103,17 +158,17 @@ func (a *Application) relPath() string {
 	}
 	return result
 }
-func NewApplication(appname, path string) (*Application, error) {
+func NewApplication(appname, path string, args []string) (*Application, error) {
 	result := new(Application)
 	result.appname = appname
 	result.path = path
-
+	result.Args = args        // TODO: Add from config
 	// resolve project subdirectories
 	subPaths, err := getSubDirectories(path)
 	if err != nil {
 		return nil, err
 	}
-	result.PathsToWatch = subPaths
+	result.PathsToWatch = subPaths // TODO: Add from config
 
 	// Receiving GOPATH
 	gps := GetGOPATHs()
@@ -131,6 +186,6 @@ func NewApplication(appname, path string) (*Application, error) {
 	if runtime.GOOS == "windows" {
 		o += ".exe"
 	}
-	result.ExecutablePath = o
+	result.ExecutablePath = o // TODO: Add from config
 	return result, nil
 }
