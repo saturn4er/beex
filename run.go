@@ -14,11 +14,10 @@ func init() {
 		Name:    "run",
 		Aliases: []string{"r"},
 		Usage:   "Run command will supervise the file system of the beego project using inotify, it will recompile and restart the app after any modifications.",
-
-		HelpName:  "",
-		ArgsUsage: "[appname] [watchall] [-main=*.go] [-downdoc=true]  [-gendoc=true]  [-e=Godeps -e=folderToExclude]  [-tags=goBuildTags]",
+		ArgsUsage: "[appname] [-main=*.go] [-gendoc=true]",
 		Flags: []cli.Flag{
-			cli.BoolFlag{Name: "watchall"},
+			cli.BoolFlag{Name: "watchall,w"},
+			cli.BoolFlag{Name: "gendoc, g"},
 		},
 		Action: func(c *cli.Context) error {
 			var appname string
@@ -47,7 +46,7 @@ func init() {
 			}
 			beegoApplication.Run()
 			beegoApplication.RunRestartWatcher()
-			<-beegoApplication.ExitC
+			<-beegoApplication.StopC
 			return nil
 		},
 	})

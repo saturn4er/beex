@@ -15,6 +15,6 @@ func main() {
 	app := cli.NewApp()
 	app.Commands = commands
 	app.Name = "Bee"
-	app.Version = "0.0.2"
+	app.Version = "0.0.3"
 	app.Run(os.Args)
 }

@@ -12,6 +12,7 @@ type WatchConfig struct {
 	PathsToWath []string
 	Extensions  []string
 	Callback    func(*fsnotify.FileEvent) error
+	StopC       chan int
 }
 
 // IsExist returns whether a file or directory exists.
@@ -45,23 +46,22 @@ func getFileModTime(path string) int64 {
 	return fi.ModTime().Unix()
 }
 
-func NewFoldersWatcher(c *WatchConfig) chan int {
+func NewFoldersWatcher(c *WatchConfig) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		ColorLog("[ERRO] Fail to create new Watcher[ %s ]\n", err)
 		os.Exit(2)
 	}
 	eventTime := make(map[string]int64)
-	stopC := make(chan int)
 	go func() {
 		var lastUpdateTime time.Time
+		var endWatch bool
 		for {
 			select {
-			case _, ok := <-stopC:
-				if ok {
-					close(stopC)
-					break
-				}
+			case <-c.StopC:
+				Debugf("Stop watcher. Receive stop signal")
+				endWatch = true
+				break
 			case e := <-watcher.Event:
 				var fire bool
 				for _, ext := range c.Extensions {
@@ -90,12 +90,15 @@ func NewFoldersWatcher(c *WatchConfig) chan int {
 					err := c.Callback(e)
 					if err != nil {
 						Debugf("Stop watcher. Received error: %v", err.Error())
-						close(stopC)
+						close(c.StopC)
 					}
 					return
 				}(lastUpdateTime)
 			case err := <-watcher.Error:
 				LogWarning("%s", err.Error()) // No need to exit here
+			}
+			if endWatch == true {
+				break
 			}
 		}
 	}()
@@ -109,5 +112,4 @@ func NewFoldersWatcher(c *WatchConfig) chan int {
 		}
 	}
 	LogInfo("Watching %d directories...", len(c.PathsToWath))
-	return stopC
 }

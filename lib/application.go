@@ -23,10 +23,9 @@ type Application struct {
 	ExecutablePath string
 	Args           []string
 	PathsToWatch   []string
-	ExitC          chan int
 	process        *exec.Cmd
 	GOPATH         string
-	RunC           chan int
+	StopC          chan int
 	RunLock        sync.Mutex
 	BuildOnce      sync.Once
 }
@@ -65,34 +64,33 @@ func (a *Application) Build() error {
 			err = errors.New("Building error")
 		}
 	})
+	a.BuildOnce = sync.Once{}
 	return err
 }
 func (a *Application) Run() {
 	a.RunLock.Lock()
 	defer a.RunLock.Unlock()
+
+	Debugf(a.ExecutablePath)
+	a.StopC = make(chan int)
 	cmd := exec.Command(a.ExecutablePath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Args = append([]string{a.ExecutablePath}, a.Args...)
-	cmd.Env = os.Environ()                                   // TODO: Add from config
+	cmd.Env = os.Environ() // TODO: Add from config
 	a.process = cmd
 	go cmd.Run()
 }
 func (a *Application) Stop() error {
 	a.RunLock.Lock()
 	defer a.RunLock.Unlock()
-	if a.process != nil && a.process.ProcessState != nil {
-		if a.process.ProcessState.Exited() {
+	if a.process != nil {
+		if a.process.ProcessState != nil {
 			Debugf("Already stopped")
 			return errors.New("Already stopped")
 		}
 		LogInfo("Stopping application..")
-		err := a.process.Process.Kill()
-		if err != nil {
-			LogError("Failed to stop application: %v", err)
-			return err
-		}
-		return nil
+		return a.process.Process.Kill()
 	}
 	return errors.New("Not running yet")
 
@@ -122,30 +120,40 @@ func (a *Application) InstallDependencies() error {
 }
 func (a *Application) RunRestartWatcher() {
 
+	// Update file watcher
+	NewFoldersWatcher(&WatchConfig{
+		PathsToWath: a.PathsToWatch,
+		Extensions:  []string{".go", ".tpl"},
+		StopC:       a.StopC,
+		Callback: func(e *fsnotify.FileEvent) error {
+			// Skip TMP files for Sublime Text.
+			if checkTMPFile(e.Name) {
+				return nil
+			}
+			err := a.Stop()
+			if err != nil {
+				LogInfo("Failed to stop application: %v", err)
+				return err
+			}
+			LogInfo("Successfully stopped.")
+			return a.BuildAndRun()
+		},
+	})
 	// Program stopped watcher
 	go func() {
 		for {
 			if a.process != nil && a.process.ProcessState != nil && a.process.ProcessState.Exited() {
-				a.process.ProcessState.Success()
+				if !a.process.ProcessState.Success() {
+					LogInfo("Application stopped with exit code != 0.")
+					close(a.StopC)
+					break
+				}
 				LogInfo("Application stopped. Restarting...")
 				a.Run()
 			}
 			time.Sleep(time.Second)
 		}
 	}()
-	// Update file watcher
-	NewFoldersWatcher(&WatchConfig{
-		PathsToWath: a.PathsToWatch,
-		Extensions:  []string{".go", ".tpl"},
-		Callback: func(e *fsnotify.FileEvent) error {
-			// Skip TMP files for Sublime Text.
-			if checkTMPFile(e.Name) {
-				return nil
-			}
-			a.Stop()
-			return a.BuildAndRun()
-		},
-	})
 }
 func (a *Application) relPath() string {
 	wd, err := os.Getwd()
@@ -162,7 +170,7 @@ func NewApplication(appname, path string, args []string) (*Application, error) {
 	result := new(Application)
 	result.appname = appname
 	result.path = path
-	result.Args = args        // TODO: Add from config
+	result.Args = args // TODO: Add from config
 	// resolve project subdirectories
 	subPaths, err := getSubDirectories(path)
 	if err != nil {
