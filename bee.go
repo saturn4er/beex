@@ -1,8 +1,10 @@
 package main
 
 import (
-	"github.com/urfave/cli"
 	"os"
+
+	"github.com/saturn4er/bee/lib"
+	"github.com/urfave/cli"
 )
 
 var commands = cli.Commands{}
@@ -15,5 +17,9 @@ func main() {
 	app.Commands = commands
 	app.Name = "Bee"
 	app.Version = "0.0.2"
+	app.Before = func(*cli.Context) error {
+		lib.LoadConfig()
+		return nil
+	}
 	app.Run(os.Args)
 }
