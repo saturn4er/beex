@@ -14,25 +14,26 @@ import (
 
 	"sync"
 
+	"strings"
+
 	"github.com/howeyc/fsnotify"
 )
 
 type Application struct {
-	appname        string
-	path           string
+	AppName        string
+	SourcesPath    string
 	ExecutablePath string
 	Args           []string
 	PathsToWatch   []string
-	process        *exec.Cmd
-	GOPATH         string
 	StopC          chan int
-	RunLock        sync.Mutex
-	BuildOnce      sync.Once
+
+	// internal
+	process   *exec.Cmd
+	gopath    string
+	runLock   sync.Mutex
+	buildOnce sync.Once
 }
 
-func (a *Application) GetAppname() string {
-	return a.appname
-}
 func (a *Application) BuildAndRun() error {
 	err := a.Build()
 	if err != nil {
@@ -43,12 +44,12 @@ func (a *Application) BuildAndRun() error {
 }
 func (a *Application) Build() error {
 	var err error
-	a.BuildOnce.Do(func() {
+	a.buildOnce.Do(func() {
 		err = a.InstallDependencies()
 		if err != nil {
 			return
 		}
-		LogInfo("Building to ./%s", a.ExecutablePath)
+		LogInfo("Building to %s", a.ExecutablePath)
 
 		args := []string{"build"}
 		args = append(args, "-o", a.ExecutablePath)
@@ -64,26 +65,27 @@ func (a *Application) Build() error {
 			err = errors.New("Building error")
 		}
 	})
-	a.BuildOnce = sync.Once{}
+	a.buildOnce = sync.Once{}
 	return err
 }
 func (a *Application) Run() {
-	a.RunLock.Lock()
-	defer a.RunLock.Unlock()
+	a.runLock.Lock()
+	defer a.runLock.Unlock()
 
-	Debugf(a.ExecutablePath)
 	a.StopC = make(chan int)
-	cmd := exec.Command(a.ExecutablePath)
+	app := shouldGetRelPath(a.ExecutablePath)
+	cmd := exec.Command(app)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Args = append([]string{a.ExecutablePath}, a.Args...)
-	cmd.Env = os.Environ() // TODO: Add from config
+	cmd.Args = a.Args
+	LogInfo("Running %v %v", app, strings.Join(cmd.Args, " "))
+	cmd.Env = append(os.Environ(), Config.Envs...)
 	a.process = cmd
 	go cmd.Run()
 }
 func (a *Application) Stop() error {
-	a.RunLock.Lock()
-	defer a.RunLock.Unlock()
+	a.runLock.Lock()
+	defer a.runLock.Unlock()
 	if a.process != nil {
 		if a.process.ProcessState != nil {
 			Debugf("Already stopped")
@@ -97,7 +99,7 @@ func (a *Application) Stop() error {
 }
 func (a *Application) InstallDependencies() error {
 	LogInfo("Checking dependencies...")
-	deps, err := GetPathDeps(a.relPath())
+	deps, err := GetPathDeps(shouldGetRelPath(a.SourcesPath))
 	if err != nil {
 		return err
 	}
@@ -123,7 +125,7 @@ func (a *Application) RunRestartWatcher() {
 	// Update file watcher
 	NewFoldersWatcher(&WatchConfig{
 		PathsToWath: a.PathsToWatch,
-		Extensions:  []string{".go", ".tpl"},
+		Extensions:  append([]string{".go", ".tpl"}, Config.WatchFiles.Extensions...),
 		StopC:       a.StopC,
 		Callback: func(e *fsnotify.FileEvent) error {
 			// Skip TMP files for Sublime Text.
@@ -143,7 +145,7 @@ func (a *Application) RunRestartWatcher() {
 	go func() {
 		for {
 			if a.process != nil && a.process.ProcessState != nil && a.process.ProcessState.Exited() {
-				if !a.process.ProcessState.Success() {
+				if !a.process.ProcessState.Success() && !Config.WatchProcess.TryRestartOnExit {
 					LogInfo("Application stopped with exit code != 0.")
 					close(a.StopC)
 					break
@@ -155,28 +157,17 @@ func (a *Application) RunRestartWatcher() {
 		}
 	}()
 }
-func (a *Application) relPath() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		panic("Can't get working directory: " + err.Error())
-	}
-	result, err := filepath.Rel(wd, a.path)
-	if err != nil {
-		panic("Can't get relative path to application")
-	}
-	return result
-}
 func NewApplication(appname, path string, args []string) (*Application, error) {
 	result := new(Application)
-	result.appname = appname
-	result.path = path
-	result.Args = args // TODO: Add from config
+	result.AppName = appname
+	result.SourcesPath = path
+	result.Args = append(args, Config.CmdArgs...)
 	// resolve project subdirectories
 	subPaths, err := getSubDirectories(path)
 	if err != nil {
 		return nil, err
 	}
-	result.PathsToWatch = subPaths // TODO: Add from config
+	result.PathsToWatch = append(subPaths, Config.WatchFiles.Folders...)
 
 	// Receiving GOPATH
 	gps := GetGOPATHs()
@@ -187,13 +178,20 @@ func NewApplication(appname, path string, args []string) (*Application, error) {
 	if len(gps) == 0 {
 		return nil, errors.New("GOPATH is empty")
 	}
-	result.GOPATH = gps[0]
+	result.gopath = gps[0]
 
 	// Set output path
-	o := result.appname
-	if runtime.GOOS == "windows" {
-		o += ".exe"
+	if Config.Build != "" {
+		result.ExecutablePath = Config.Build
+	} else {
+		o := "./" + result.AppName
+		if runtime.GOOS == "windows" {
+			o += ".exe"
+		}
+		result.ExecutablePath, err = filepath.Abs(o)
+		if err != nil {
+			return nil, err
+		}
 	}
-	result.ExecutablePath = o // TODO: Add from config
 	return result, nil
 }

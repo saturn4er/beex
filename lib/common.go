@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"path/filepath"
+
 	"github.com/howeyc/fsnotify"
 )
 
@@ -112,4 +114,19 @@ func NewFoldersWatcher(c *WatchConfig) {
 		}
 	}
 	LogInfo("Watching %d directories...", len(c.PathsToWath))
+}
+
+func shouldGetRelPath(dest string) string {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic("Can't get working directory: " + err.Error())
+	}
+	result, err := filepath.Rel(wd, dest)
+	if err != nil {
+		panic("Can't get relative path to application")
+	}
+	if len(result) > 0 && result[0] != '.' {
+		result = "./" + result
+	}
+	return result
 }

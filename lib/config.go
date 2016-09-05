@@ -6,23 +6,26 @@ import (
 )
 
 type conf struct {
-	WatchFiles struct {
-		Extensions []string
-		Folders    []string
-	}
+	CmdArgs      []string // Command line arguments
+	Envs         []string // Environment variables
+	Build        string   // Build output
 	WatchProcess struct {
-		TryRestartOnExit bool
+		TryRestartOnExit bool // Should we try to rebuild application, if bee catch exit status != 0
 	}
-	CmdArgs  []string
-	Envs     []string
+	WatchFiles struct {
+		Extensions []string // Additional extensions, which bee should watch
+		Folders    []string // Additional folders, which bee should watch
+	}
 	Database struct {
 		Driver string
 		Conn   string
 	}
 }
-
+// Config contains all configs, parsed from `bee.json`
 var Config conf
 
+
+// Load config unmarshal bee.json to Config var
 func LoadConfig() {
 	config, err := ioutil.ReadFile("bee.json")
 	if err != nil {

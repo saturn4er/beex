@@ -16,7 +16,7 @@ func main() {
 	app := cli.NewApp()
 	app.Commands = commands
 	app.Name = "Bee"
-	app.Version = "0.0.4"
+	app.Version = "0.0.5"
 	app.Before = func(*cli.Context) error {
 		lib.LoadConfig()
 		return nil
